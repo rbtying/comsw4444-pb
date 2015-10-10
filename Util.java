@@ -1,9 +1,11 @@
 package pb.g3;
 
 import pb.sim.Asteroid;
+import pb.sim.Orbit;
 import pb.sim.Point;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -13,9 +15,27 @@ import java.util.function.Function;
  */
 public class Util {
 
+    /**
+     * Creates a string with a time in years and days
+     *
+     * @param t time in days
+     * @return stringified form
+     */
+    public static String toYearString(long t) {
+        return "day " + (t % 365) + " of year " + ((t / 365) + 1);
+    }
+
+    /**
+     * Finds the next t_offset in the cycle after current_time
+     *
+     * @param t_offset     the time from the original orbit
+     * @param a            the asteroid whose period we are inspecting
+     * @param current_time the minimum time
+     * @return
+     */
     public static long nextAfterTime(long t_offset, Asteroid a, long current_time) {
         long t = current_time % a.orbit.period() + t_offset;
-        if (t < current_time) {
+        while (t < current_time) {
             t += a.orbit.period();
         }
         return t;
@@ -23,7 +43,6 @@ public class Util {
 
     /**
      * Returns the time of the collision between asteroids between [initial_time, max_time)
-     * <p>
      * runs in O(shorter_orbit_period + num_intersection_points)
      *
      * @param a            the first asteroid to collide
@@ -33,6 +52,8 @@ public class Util {
      * @return -1 if collision not found, otherwise, time of collision
      */
     public static long findCollision(Asteroid a, Asteroid b, long initial_time, long max_time) {
+        OrbitPair op = OrbitPair.factory(a, b);
+
         Asteroid shorter_orbit = a;
         Asteroid longer_orbit = b;
         if (b.orbit.period() < a.orbit.period()) {
@@ -40,31 +61,14 @@ public class Util {
             longer_orbit = a;
         }
 
-        // if more than 5 points intersect per real intersection, something is very wrong
-        ArrayList<Long> potential_intersection_points = new ArrayList<>(512);
-
-        Point p1 = new Point(), p2 = new Point(), focus = new Point();
-        longer_orbit.orbit.center(focus);
-        focus.x *= 2;
-        focus.y *= 2;
-
-        double collision_distance = shorter_orbit.radius() + longer_orbit.radius();
-
-        long T = shorter_orbit.orbit.period();
-
-        for (long time = 0; time < T && initial_time + time < max_time; ++time) {
-            long t = time + initial_time;
-            positionAt(shorter_orbit, t, p1);
-            double d1 = Point.distance(p1, focus);
-            double r = p1.magnitude();
-            if (Math.abs(d1 + r - 2 * longer_orbit.orbit.a) < collision_distance) {
-                potential_intersection_points.add(time);
-            }
-        }
+        List<Long> potential_intersection_points = op.intersections();
 
         // potential_intersection_points now contains up to num_intersections points to check
-        // points in potential_intersection_points are epoch-adjusted
-        long base_offset = initial_time;
+        // points in potential_intersection_points are not epoch-adjusted
+        long base_offset = initial_time + shorter_orbit.epoch;
+        long T = op.shorter_orbit.period();
+
+        Point p1 = new Point(), p2 = new Point();
 
         while (base_offset < max_time) {
             for (Long intersection_point : potential_intersection_points) {
@@ -72,7 +76,7 @@ public class Util {
                 positionAt(shorter_orbit, t, p1);
                 positionAt(longer_orbit, t, p2);
                 double dist = Point.distance(p1, p2);
-                if (dist < collision_distance) {
+                if (dist < op.collision_distance) {
                     return t;
                 }
             }
@@ -95,9 +99,10 @@ public class Util {
 
     /**
      * Computes the argmax of f from i=start to i=end
+     *
      * @param start initial value of long
-     * @param end one more than last value of long
-     * @param f f: long -> double
+     * @param end   one more than last value of long
+     * @param f     f: long -> double
      * @return
      */
     public static long findArgMax(long start, long end, Function<Long, Double> f) {
@@ -150,9 +155,10 @@ public class Util {
 
     /**
      * Computes the max of f from i=start to i=end
+     *
      * @param start initial value of long
-     * @param end one more than last value of long
-     * @param f f: long -> double
+     * @param end   one more than last value of long
+     * @param f     f: long -> double
      * @return
      */
     public static double findMax(long start, long end, Function<Long, Double> f) {
@@ -211,6 +217,10 @@ public class Util {
         return 0.5 * a.mass * v * v;
     }
 
+    public static boolean eq(double a, double b) {
+        return Double.isNaN(a) && Double.isNaN(b) || a == b;
+    }
+
     public static class Key {
         private static Map<Asteroid, Key> cache = new ConcurrentHashMap<>();
         private final double mass;
@@ -260,6 +270,90 @@ public class Util {
         @Override
         public int hashCode() {
             return hash;
+        }
+    }
+
+    public static class OrbitPair {
+        private static Map<OrbitPair, List<Long>> intersection_cache = new ConcurrentHashMap<>();
+        public Orbit shorter_orbit, longer_orbit;
+        public double collision_distance;
+
+        private OrbitPair(Orbit a, Orbit b, double collision_distance) {
+            if (a.period() > b.period()) {
+                shorter_orbit = b;
+                longer_orbit = a;
+            } else {
+                shorter_orbit = a;
+                longer_orbit = b;
+            }
+            this.collision_distance = collision_distance;
+        }
+
+        public static void clearCache() {
+            System.out.println("Deleting " + intersection_cache.size() + " items from intersection cache");
+            intersection_cache.clear();
+        }
+
+        public static boolean orbitsEqual(Orbit a, Orbit b) {
+            return eq(a.a, b.a) && eq(a.b, b.b) && eq(a.A, b.A) && eq(a.Mo, b.Mo);
+        }
+
+        public static OrbitPair factory(Asteroid a, Asteroid b) {
+            return new OrbitPair(a.orbit, b.orbit, a.radius() + b.radius());
+        }
+
+        @Override
+        public int hashCode() {
+            int hash = 17;
+            hash = hash * 23 + Double.hashCode(longer_orbit.a);
+            hash = hash * 23 + Double.hashCode(longer_orbit.b);
+            hash = hash * 23 + Double.hashCode(longer_orbit.A);
+            hash = hash * 23 + Double.hashCode(longer_orbit.Mo);
+            hash = hash * 23 + Double.hashCode(shorter_orbit.a);
+            hash = hash * 23 + Double.hashCode(shorter_orbit.b);
+            hash = hash * 23 + Double.hashCode(shorter_orbit.A);
+            hash = hash * 23 + Double.hashCode(shorter_orbit.Mo);
+            hash = hash * 23 + Double.hashCode(collision_distance);
+            return hash;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (!(o instanceof OrbitPair)) {
+                return false;
+            }
+            OrbitPair op = (OrbitPair) o;
+            boolean eq_s = orbitsEqual(shorter_orbit, shorter_orbit);
+            boolean eq_l = orbitsEqual(longer_orbit, longer_orbit);
+            boolean coll_eq = collision_distance == op.collision_distance;
+
+            return eq_s && eq_l && coll_eq;
+        }
+
+        /**
+         * Computes intersections between orbits. Cached.
+         *
+         * @return List of intersections, denoted in positions on the shorter orbit
+         */
+        public List<Long> intersections() {
+            return intersection_cache.computeIfAbsent(this, (orbitPair) -> {
+                List<Long> intersections = new ArrayList<>(2000);
+                Point focus = orbitPair.longer_orbit.center();
+                focus.x *= 2;
+                focus.y *= 2;
+
+                Point p = new Point();
+                for (long i = 0; i < orbitPair.shorter_orbit.period(); ++i) {
+                    orbitPair.shorter_orbit.positionAt(i, p);
+                    double d1 = p.magnitude();
+                    double d2 = Point.distance(p, focus);
+
+                    if (d1 + d2 - 2 * longer_orbit.a < orbitPair.collision_distance) {
+                        intersections.add(i);
+                    }
+                }
+                return intersections;
+            });
         }
     }
 
@@ -321,8 +415,8 @@ public class Util {
         }
 
         public String toString() {
-            return String.format("Push: Asteroid %d at time %d with energyAtTime %f in direction %f", asteroid_idx,
-                    push_time, energy, direction);
+            return String.format("Push: asteroid %d on %s with energyAtTime %6.3e in direction %.02f deg",
+                    asteroid_idx, toYearString(push_time), energy, Math.toDegrees(direction));
         }
 
         @Override
