@@ -13,6 +13,13 @@ import java.util.function.Function;
  */
 public class Util {
 
+    public static long nextAfterTime(long t_offset, Asteroid a, long current_time) {
+        long t = current_time % a.orbit.period() + t_offset;
+        if (t < current_time) {
+            t += a.orbit.period();
+        }
+        return t;
+    }
 
     /**
      * Returns the time of the collision between asteroids between [initial_time, max_time)
@@ -66,7 +73,6 @@ public class Util {
                 positionAt(longer_orbit, t, p2);
                 double dist = Point.distance(p1, p2);
                 if (dist < collision_distance) {
-                    System.out.println("Found a collision!");
                     return t;
                 }
             }
@@ -260,6 +266,7 @@ public class Util {
     public static class Push implements Comparable<Push> {
         public int asteroid_idx;
         public long push_time;
+        public long expected_collision_time;
         public double energy;
         public double direction;
         public double mass;
@@ -277,6 +284,25 @@ public class Util {
             init(aidx, pt, e, d, m);
         }
 
+        public static Push add(Push a, Push b) {
+            if (a.asteroid_idx != b.asteroid_idx || a.push_time != b.push_time || a.mass != b.mass) {
+                throw new RuntimeException("Adding incompatible pushes");
+            }
+            double double_root_m_times_v_a = Math.sqrt(a.energy);
+            double double_root_m_times_v_b = Math.sqrt(b.energy);
+            double dxa = Math.cos(a.direction) * double_root_m_times_v_a;
+            double dya = Math.sin(a.direction) * double_root_m_times_v_a;
+            double dxb = Math.cos(b.direction) * double_root_m_times_v_b;
+            double dyb = Math.sin(b.direction) * double_root_m_times_v_b;
+            double dx = dxa + dxb;
+            double dy = dya + dyb;
+
+            double E = dx * dx + dy * dy;
+            double direction = Math.atan2(dy, dx);
+
+            return new Push(a.asteroid_idx, a.push_time, E, direction, a.mass);
+        }
+
         private void init(int aidx, long pt, double e, double d, double m) {
             asteroid_idx = aidx;
             push_time = pt;
@@ -284,6 +310,7 @@ public class Util {
             direction = d;
             mass = m;
             _simulated = null;
+            expected_collision_time = -1;
         }
 
         public Asteroid simulatedAsteroid(Asteroid a[]) {
