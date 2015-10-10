@@ -241,7 +241,7 @@ public class Player implements pb.sim.Player {
             int range = 3;
 
             for (int i = target_idx - range; i <= target_idx + range; ++i) {
-                if (i == target_idx || i < 0 || i > radius_indexes.length) {
+                if (i == target_idx || i < 0 || i >= radius_indexes.length) {
                     continue;
                 }
                 evaluateAsteroid(target, asteroids, i, best_next_push_heap, 365);
