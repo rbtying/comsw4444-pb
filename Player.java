@@ -3,11 +3,13 @@ package pb.g3;
 import pb.sim.Asteroid;
 import pb.sim.Orbit;
 import pb.sim.Point;
+import pb.sim.InvalidOrbitException;
 
 import java.util.Arrays;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Random;
 
 public class Player implements pb.sim.Player {
 
@@ -215,80 +217,122 @@ public class Player implements pb.sim.Player {
                 return;
             }
         } else {
-            // no pushes computed
-            System.out.println("no next push, computing more");
-            long startTime = System.nanoTime();
+        	// no pushes computed
+        	System.out.println("no next push, computing more");
+        	
+        	long startTime = System.nanoTime();
 
-            Integer indexes[] = new Integer[asteroids.length];
-            Integer radius_indexes[] = new Integer[asteroids.length];
-            for (int i = 0; i < indexes.length; ++i) {
-                indexes[i] = i;
-                radius_indexes[i] = i;
+    		Integer indexes[] = new Integer[asteroids.length];
+    		Integer radius_indexes[] = new Integer[asteroids.length];
+    		for (int i = 0; i < indexes.length; ++i) {
+    			indexes[i] = i;
+    			radius_indexes[i] = i;
+    		}
+
+    		Arrays.sort(radius_indexes, (o1, o2) -> (int) Math.signum(Util.positionAt(asteroids[o2], time).magnitude() -
+    				Util.positionAt(asteroids[o1], time).magnitude()));
+
+    		Arrays.sort(indexes, (o1, o2) -> (int) Math.signum(asteroids[o2].mass - asteroids[o1].mass));
+    		
+        	// if less than half the time limit has passed
+        	if ((float)time / time_limit < 0.5) {
+
+        		
+        		// grab middle asteroid
+        		Asteroid target = asteroids[radius_indexes[radius_indexes.length / 2]];
+        		int target_idx = radius_indexes.length / 2;
+
+        		PriorityQueue<Util.Push> best_next_push_heap = new PriorityQueue<Util.Push>((p1, p2) -> (int) Math.signum
+        				(p1.energy - p2.energy));
+
+        		int range = 3;
+
+        		for (int i = target_idx - range; i <= target_idx + range; ++i) {
+        			if (i == target_idx || i < 0 || i >= radius_indexes.length) {
+        				continue;
+        			}
+        			evaluateAsteroid(target, asteroids, radius_indexes[i], best_next_push_heap, 365);
+        		}
+
+        		if (!best_next_push_heap.isEmpty()) {
+        			next_pushes.add(best_next_push_heap.remove());
+        			System.out.println("Next: " + next_pushes.peek());
+        			System.out.println("Expected collision time: " + Util.toYearString(next_pushes.peek()
+        					.expected_collision_time));
+        			System.out.println("Elapsed wall time: " + (System.nanoTime() - startTime) / 1e9);
+        			return;
+        		}
+
+        		System.err.println("Couldn't find a good move :(");
+        		System.err.println("Considering circularizing orbits");
+
+        		Util.Push next_push = null;
+
+        		for (int i = 1; i < indexes.length; ++i) {
+        			Asteroid a = asteroids[indexes[i]];
+        			long apoapsis_time = Util.nextAfterTime(findApoapsis(a), a, time);
+        			double r_ap = Util.positionAt(a, apoapsis_time).magnitude();
+        			double r_ph = findPeriapsisDistance(a);
+        			double E = reverseHohmannTransfer(a, r_ap);
+        			if (Math.abs(E) == 0) {
+        				continue;
+        			}
+        			if (Math.abs(r_ap - r_ph) > a.radius()) {
+        				// make it a circles!!
+        				Util.Push circularize = new Util.Push(a, indexes[i], apoapsis_time, E);
+        				if (next_push == null || circularize.push_time < next_push.push_time) {
+        					next_push = circularize;
+        				}
+        			}
+        		}
+
+        		if (next_push != null) {
+        			System.out.println("Adding circularization " + next_push);
+        			next_pushes.add(next_push);
+        			System.out.println("Elapsed wall time: " + (System.nanoTime() - startTime) / 1e9);
+        			return;
+        		} else {
+        			System.out.println("Skipping 365 days");
+        			time_skip = time + 365;
+
+        		}
+        	}
+        	// more than half the the time limit has passed
+        	else {
+        		Random random = new Random();
+        		Asteroid a1 = null;
+        		int i = radius_indexes[radius_indexes.length - 1];
+        		Point v = asteroids[i].orbit.velocityAt(time);
+        		double v1 = Math.sqrt(v.x * v.x + v.y * v.y);
+        		double v2 = v1 * (random.nextDouble() * 0.25 + 0.05);
+        		double d1 = Math.atan2(v.y, v.x);
+        		double d2 = d1 + (random.nextDouble() - 0.5) * Math.PI * 0.25;
+        		double E = 0.5 * asteroids[i].mass * v2 * v2;
+        		try {
+        			a1 = Asteroid.push(asteroids[i], time, E, d2);
+        		} catch (InvalidOrbitException e) {
+        			System.out.println("Invalid Orbit: " + e.getMessage());
+        			return;
+        		}
+        		Point p1 = v, p2 = new Point();
+        		for (int j = 0; j < asteroids.length; j++) {
+        			if (i == j) continue;
+        			Asteroid a2 = asteroids[j];
+        			double r = a1.radius() + a2.radius();
+        			for (long ft = 0 ; ft != 1825 ; ++ft) {
+        				long t = time + ft;
+        				if (t >= time_limit) break;
+        				a1.orbit.positionAt(t - a1.epoch, p1);
+        				a2.orbit.positionAt(t - a2.epoch, p2);
+        				if (Point.distance(p1, p2) < r) {
+        					energy[i] = E;
+        					direction[i] = d2;
+        					next_pushes.add(new Util.Push(asteroids[i], i, t, E));
+        				}
+        			}
+        		}
             }
 
-            Arrays.sort(radius_indexes, (o1, o2) -> (int) Math.signum(Util.positionAt(asteroids[o2], time).magnitude() -
-                    Util.positionAt(asteroids[o1], time).magnitude()));
-
-            Arrays.sort(indexes, (o1, o2) -> (int) Math.signum(asteroids[o2].mass - asteroids[o1].mass));
-
-            // grab middle asteroid
-            Asteroid target = asteroids[radius_indexes[radius_indexes.length / 2]];
-            int target_idx = radius_indexes.length / 2;
-
-            PriorityQueue<Util.Push> best_next_push_heap = new PriorityQueue<Util.Push>((p1, p2) -> (int) Math.signum
-                    (p1.energy - p2.energy));
-
-            int range = 3;
-
-            for (int i = target_idx - range; i <= target_idx + range; ++i) {
-                if (i == target_idx || i < 0 || i >= radius_indexes.length) {
-                    continue;
-                }
-                evaluateAsteroid(target, asteroids, radius_indexes[i], best_next_push_heap, 365);
-            }
-
-            if (!best_next_push_heap.isEmpty()) {
-                next_pushes.add(best_next_push_heap.remove());
-                System.out.println("Next: " + next_pushes.peek());
-                System.out.println("Expected collision time: " + Util.toYearString(next_pushes.peek()
-                        .expected_collision_time));
-                System.out.println("Elapsed wall time: " + (System.nanoTime() - startTime) / 1e9);
-                return;
-            }
-
-            System.err.println("Couldn't find a good move :(");
-            System.err.println("Considering circularizing orbits");
-
-            Util.Push next_push = null;
-
-            for (int i = 1; i < indexes.length; ++i) {
-                Asteroid a = asteroids[indexes[i]];
-                long apoapsis_time = Util.nextAfterTime(findApoapsis(a), a, time);
-                double r_ap = Util.positionAt(a, apoapsis_time).magnitude();
-                double r_ph = findPeriapsisDistance(a);
-                double E = reverseHohmannTransfer(a, r_ap);
-                if (Math.abs(E) == 0) {
-                    continue;
-                }
-                if (Math.abs(r_ap - r_ph) > a.radius()) {
-                    // make it a circles!!
-                    Util.Push circularize = new Util.Push(a, indexes[i], apoapsis_time, E);
-                    if (next_push == null || circularize.push_time < next_push.push_time) {
-                        next_push = circularize;
-                    }
-                }
-            }
-
-            if (next_push != null) {
-                System.out.println("Adding circularization " + next_push);
-                next_pushes.add(next_push);
-                System.out.println("Elapsed wall time: " + (System.nanoTime() - startTime) / 1e9);
-                return;
-            } else {
-                System.out.println("Skipping 365 days");
-                time_skip = time + 365;
-
-            }
         }
     }
 }
