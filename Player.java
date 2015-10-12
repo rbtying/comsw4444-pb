@@ -1,15 +1,15 @@
 package pb.g3;
 
 import pb.sim.Asteroid;
+import pb.sim.InvalidOrbitException;
 import pb.sim.Orbit;
 import pb.sim.Point;
-import pb.sim.InvalidOrbitException;
 
 import java.util.Arrays;
 import java.util.Map;
 import java.util.PriorityQueue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Player implements pb.sim.Player {
 
@@ -42,9 +42,9 @@ public class Player implements pb.sim.Player {
     /**
      * Computes the energyAtTime needed to transfer asteroid a from radius b
      *
-     * @param a
-     * @param r_b
-     * @return
+     * @param a asteroid to transfer (elliptical at tangent)
+     * @param r_b radius to transfer it to
+     * @return reverse Hohmann transfer energy
      */
     public static double reverseHohmannTransfer(Asteroid a, double r_b) {
         double r_a = a.orbit.positionAt(findPeriapsis(a)).magnitude();
@@ -53,6 +53,12 @@ public class Player implements pb.sim.Player {
         return Math.copySign(a.mass * dv * dv * 0.5, dv);
     }
 
+    /**
+     * Finds the periapsis time of a
+     *
+     * @param a the asteroid
+     * @return the time in the period which is a's periapsis
+     */
     private static long findPeriapsis(Asteroid a) {
         Util.Key k = Util.Key.factory(a);
         Point p = new Point();
@@ -62,15 +68,30 @@ public class Player implements pb.sim.Player {
         })) + a.epoch) % a.orbit.period();
     }
 
+    /**
+     * Finds the apoapsis time of a
+     * @param a the asteroid
+     * @return the time in the period which is a's apoapsis
+     */
     private static long findApoapsis(Asteroid a) {
         // maximum distance point is half the orbit away from the minimum distance point
         return (findPeriapsis(a) + a.orbit.period() / 2) % a.orbit.period();
     }
 
+    /**
+     * Finds the periapsis distance of a
+     * @param a an asteroid
+     * @return periapsis distance
+     */
     private static double findPeriapsisDistance(Asteroid a) {
         return Util.positionAt(a, findPeriapsis(a)).magnitude();
     }
 
+    /**
+     * Finds the apoapsis distance of a
+     * @param a an asteroid
+     * @return apoapsis distance
+     */
     private static double findApoapsisDistance(Asteroid a) {
         return Util.positionAt(a, findApoapsis(a)).magnitude();
     }
@@ -85,10 +106,40 @@ public class Player implements pb.sim.Player {
     }
 
     private Util.Push moveToRadius(long push_time, int aidx, Asteroid a, double radius) {
-        double r_a = a.orbit.positionAt(push_time - a.epoch).magnitude();
-        double normalization_energy = reverseHohmannTransfer(a, r_a); // make it a circle?
+        double r_a = Util.positionAt(a, push_time).magnitude();
         double hohmann_energy = hohmannTransfer(a, radius); // instantaneously ellipsize it
-        return new Util.Push(a, aidx, push_time, hohmann_energy + normalization_energy);
+        Util.Push hohmann_push = new Util.Push(a, aidx, push_time, hohmann_energy);
+        return Util.Push.add(hohmann_push, circularize(push_time, aidx, a));
+    }
+
+    private Util.Push circularize(long push_time, int aidx, Asteroid a) {
+        // circularizes at current radius
+        Point p = new Point();
+        Util.positionAt(a, push_time, p);
+        double r = p.magnitude();
+        double ortho_dir = p.direction();
+
+        Util.velocityAt(a, push_time, p);
+        double tangent_dir = p.direction();
+        double current_velocity = p.magnitude();
+
+
+        double bad_vel = Math.cos(ortho_dir - tangent_dir) * current_velocity;
+        double good_vel = Math.sin(ortho_dir - tangent_dir) * current_velocity;
+
+        double energy_to_remove_tangent_vel = 0.5 * a.mass * bad_vel * bad_vel;
+        double reverse_bad_direction = ortho_dir + Math.PI;
+
+        double target_v = Math.sqrt(Orbit.GM / r);
+
+        Util.Push counteract_bad = new Util.Push(aidx, push_time, energy_to_remove_tangent_vel, reverse_bad_direction, a.mass);
+        Util.Push add_good = new Util.Push(aidx, push_time, 0.5 * a.mass * Math.pow(target_v - Math.abs(good_vel), 2), ortho_dir + Math.PI / 2, a.mass);
+
+        return Util.Push.add(counteract_bad, add_good);
+    }
+
+    public double hohmannAngularOffset(double r1, double r2) {
+        return Util.normalizedAngle(Math.PI * (1 - ((1 / (2 * Math.sqrt(2))) * Math.sqrt(Math.pow(r1 / r2 + 1, 3)))));
     }
 
     /**
@@ -108,61 +159,48 @@ public class Player implements pb.sim.Player {
         double r_target_ph = findPeriapsisDistance(target);
         double r_target_ap = findApoapsisDistance(target);
 
+        // this thing is basically a circle
+        Point p = new Point();
+        for (long dpush_time = 1; dpush_time < max_relative_start_time; ++dpush_time) {
+            push_time = time + dpush_time;
+            Util.positionAt(a, push_time, p);
+            double local_angle = p.direction();
+            double local_radius = p.magnitude();
+            Util.positionAt(target, push_time, p);
+            double target_angle = p.direction();
 
-        if ((Math.abs(r_ap - r_peri) < a.radius())) {
-            // this thing is basically a circle
-            for (long dpush_time = 1; dpush_time < max_relative_start_time; ++dpush_time) {
-                push_time = time + dpush_time;
+            double reqd_ang_offset = hohmannAngularOffset(local_radius, r_target_ph);
+            double local_ang_offset = Util.normalizedAngle(target_angle - local_angle);
 
-                Util.Push push_to_r_largest_ph = moveToRadius(push_time, a_idx, a, r_target_ph);
-                if (push_to_r_largest_ph.energy > 0) {
-                    Asteroid r_largest_ph_a = push_to_r_largest_ph.simulatedAsteroid(asteroids);
-                    push_to_r_largest_ph.expected_collision_time = Util.findCollision(target, r_largest_ph_a,
-                            push_time, push_time + a.orbit.period() * 2);
-
-                    if (push_to_r_largest_ph.expected_collision_time >= 0) {
-                        best_next_push_heap.add(push_to_r_largest_ph);
-                    }
-                }
-
-                if (Math.abs(r_target_ap - r_target_ph) < a.radius() + target.radius()) {
-                    // if the largest is sufficiently eccentric, try also the other intersection
-
-                    Util.Push push_to_r_largest_ap = moveToRadius(push_time, a_idx, a, r_target_ap);
-                    if (push_to_r_largest_ap.energy > 0) {
-                        Asteroid r_largest_ap_a = push_to_r_largest_ap.simulatedAsteroid(asteroids);
-                        push_to_r_largest_ap.expected_collision_time = Util.findCollision(target, r_largest_ap_a,
-                                push_time, push_time + a.orbit.period() * 2);
-
-                        if (push_to_r_largest_ap.expected_collision_time >= 0) {
-                            best_next_push_heap.add(push_to_r_largest_ap);
-                        }
-                    }
-                }
+            if (Math.abs(reqd_ang_offset - local_ang_offset) > Math.PI / 72) {
+                continue;
             }
-        } else {
-            // only check the apoapsis
-            push_time = Util.nextAfterTime(findApoapsis(a), a, time);
+
 
             Util.Push push_to_r_largest_ph = moveToRadius(push_time, a_idx, a, r_target_ph);
             if (push_to_r_largest_ph.energy > 0) {
                 Asteroid r_largest_ph_a = push_to_r_largest_ph.simulatedAsteroid(asteroids);
-                long collision_time_ph = Util.findCollision(target, r_largest_ph_a, push_time, push_time + a.orbit
-                        .period() * 2);
+                push_to_r_largest_ph.expected_collision_time = Util.findCollision(target, r_largest_ph_a,
+                        push_time + r_largest_ph_a.orbit.period() / 2 - 5, push_time + +r_largest_ph_a.orbit
+                                .period() / 2 + 5);
 
-                if (collision_time_ph >= 0) {
+                if (push_to_r_largest_ph.expected_collision_time >= 0) {
                     best_next_push_heap.add(push_to_r_largest_ph);
                 }
             }
 
-            Util.Push push_to_r_largest_ap = moveToRadius(push_time, a_idx, a, r_target_ap);
-            if (push_to_r_largest_ap.energy > 0) {
-                Asteroid r_largest_ap_a = push_to_r_largest_ap.simulatedAsteroid(asteroids);
-                long collision_time_ap = Util.findCollision(target, r_largest_ap_a, push_time, push_time + a.orbit
-                        .period() * 2);
+            if (Math.abs(r_target_ap - r_target_ph) < a.radius() + target.radius()) {
+                // if the largest is sufficiently eccentric, try also the other intersection
 
-                if (collision_time_ap >= 0) {
-                    best_next_push_heap.add(push_to_r_largest_ap);
+                Util.Push push_to_r_largest_ap = moveToRadius(push_time, a_idx, a, r_target_ap);
+                if (push_to_r_largest_ap.energy > 0) {
+                    Asteroid r_largest_ap_a = push_to_r_largest_ap.simulatedAsteroid(asteroids);
+                    push_to_r_largest_ap.expected_collision_time = Util.findCollision(target, r_largest_ap_a,
+                            push_time, push_time + a.orbit.period() * 2);
+
+                    if (push_to_r_largest_ap.expected_collision_time >= 0) {
+                        best_next_push_heap.add(push_to_r_largest_ap);
+                    }
                 }
             }
         }
@@ -201,6 +239,7 @@ public class Player implements pb.sim.Player {
             if (time < next_push.push_time) {
                 return;
             }
+
             if (time == next_push.push_time) {
                 // apply push
                 energy[next_push.asteroid_idx] = next_push.energy;
@@ -227,32 +266,34 @@ public class Player implements pb.sim.Player {
     		for (int i = 0; i < indexes.length; ++i) {
     			indexes[i] = i;
     			radius_indexes[i] = i;
-    		}
+            }
 
-    		Arrays.sort(radius_indexes, (o1, o2) -> (int) Math.signum(Util.positionAt(asteroids[o2], time).magnitude() -
-    				Util.positionAt(asteroids[o1], time).magnitude()));
+            Arrays.sort(radius_indexes, (o1, o2) -> (int) Math.signum(findPeriapsisDistance(asteroids[o2]) -
+                    findPeriapsisDistance(asteroids[o1])));
 
     		Arrays.sort(indexes, (o1, o2) -> (int) Math.signum(asteroids[o2].mass - asteroids[o1].mass));
-    		
-        	// if less than half the time limit has passed
-        	if ((float)time / time_limit < 0.5) {
 
-        		
-        		// grab middle asteroid
-        		Asteroid target = asteroids[radius_indexes[radius_indexes.length / 2]];
-        		int target_idx = radius_indexes.length / 2;
+            long search_space = (long) Math.ceil((double) (time_limit - time) / (2 * asteroids.length));
 
-        		PriorityQueue<Util.Push> best_next_push_heap = new PriorityQueue<Util.Push>((p1, p2) -> (int) Math.signum
-        				(p1.energy - p2.energy));
+            // if less than half the time limit has passed
+            if ((float)time / time_limit < 0.5) {
+                // grab outer asteroid, or most massive if it's much more massive
+                Asteroid target = asteroids[radius_indexes[0]];
+                int tgt_idx = radius_indexes[0];
+                if (asteroids[indexes[0]].mass - asteroids[indexes[1]].mass > asteroids[indexes[1]].mass) {
+                    target = asteroids[indexes[0]];
+                    tgt_idx = indexes[0];
+                }
 
-        		int range = 3;
+                PriorityQueue<Util.Push> best_next_push_heap = new PriorityQueue<>((p1, p2) -> (int) Math.signum
+                        (p1.energy - p2.energy));
 
-        		for (int i = target_idx - range; i <= target_idx + range; ++i) {
-        			if (i == target_idx || i < 0 || i >= radius_indexes.length) {
-        				continue;
-        			}
-        			evaluateAsteroid(target, asteroids, radius_indexes[i], best_next_push_heap, 365);
-        		}
+                for (int i = 0; i < radius_indexes.length; ++i) {
+                    if (tgt_idx == radius_indexes[i]) {
+                        continue;
+                    }
+                    evaluateAsteroid(target, asteroids, radius_indexes[i], best_next_push_heap, search_space);
+                }
 
         		if (!best_next_push_heap.isEmpty()) {
         			next_pushes.add(best_next_push_heap.remove());
@@ -268,20 +309,20 @@ public class Player implements pb.sim.Player {
 
         		Util.Push next_push = null;
 
-        		for (int i = 1; i < indexes.length; ++i) {
-        			Asteroid a = asteroids[indexes[i]];
-        			long apoapsis_time = Util.nextAfterTime(findApoapsis(a), a, time);
-        			double r_ap = Util.positionAt(a, apoapsis_time).magnitude();
+                for (int i = 0; i < indexes.length; ++i) {
+                    Asteroid a = asteroids[i];
+                    long apoapsis_time = Util.nextAfterTime(findApoapsis(a), a, time);
+                    double r_ap = Util.positionAt(a, apoapsis_time).magnitude();
         			double r_ph = findPeriapsisDistance(a);
         			double E = reverseHohmannTransfer(a, r_ap);
         			if (Math.abs(E) == 0) {
         				continue;
-        			}
-        			if (Math.abs(r_ap - r_ph) > a.radius()) {
-        				// make it a circles!!
-        				Util.Push circularize = new Util.Push(a, indexes[i], apoapsis_time, E);
-        				if (next_push == null || circularize.push_time < next_push.push_time) {
-        					next_push = circularize;
+                    }
+                    if (Math.abs(r_ap - r_ph) > a.radius()) {
+                        // make it a circles!!
+                        Util.Push circularize = circularize(apoapsis_time, i, a);
+                        if (next_push == null || circularize.push_time < next_push.push_time) {
+                            next_push = circularize;
         				}
         			}
         		}
@@ -292,45 +333,39 @@ public class Player implements pb.sim.Player {
         			System.out.println("Elapsed wall time: " + (System.nanoTime() - startTime) / 1e9);
         			return;
         		} else {
-        			System.out.println("Skipping 365 days");
-        			time_skip = time + 365;
-
-        		}
-        	}
+                    System.out.println("Skipping " + search_space + "  days");
+                    time_skip = time + search_space;
+                }
+            }
         	// more than half the the time limit has passed
         	else {
         		Random random = new Random();
         		Asteroid a1 = null;
-        		int i = radius_indexes[radius_indexes.length - 1];
-        		Point v = asteroids[i].orbit.velocityAt(time);
-        		double v1 = Math.sqrt(v.x * v.x + v.y * v.y);
-        		double v2 = v1 * (random.nextDouble() * 0.25 + 0.05);
-        		double d1 = Math.atan2(v.y, v.x);
-        		double d2 = d1 + (random.nextDouble() - 0.5) * Math.PI * 0.25;
+                int i = radius_indexes[0];
+                Point v = Util.velocityAt(asteroids[i], time);
+                double v1 = v.magnitude();
+                double v2 = v1 * (random.nextDouble() * 0.25 + 0.05);
+                double d1 = v.direction();
+                double d2 = d1 + (random.nextDouble() - 0.5) * Math.PI * 0.25;
         		double E = 0.5 * asteroids[i].mass * v2 * v2;
-        		try {
-        			a1 = Asteroid.push(asteroids[i], time, E, d2);
-        		} catch (InvalidOrbitException e) {
-        			System.out.println("Invalid Orbit: " + e.getMessage());
-        			return;
-        		}
-        		Point p1 = v, p2 = new Point();
-        		for (int j = 0; j < asteroids.length; j++) {
-        			if (i == j) continue;
-        			Asteroid a2 = asteroids[j];
-        			double r = a1.radius() + a2.radius();
-        			for (long ft = 0 ; ft != 1825 ; ++ft) {
-        				long t = time + ft;
-        				if (t >= time_limit) break;
-        				a1.orbit.positionAt(t - a1.epoch, p1);
-        				a2.orbit.positionAt(t - a2.epoch, p2);
-        				if (Point.distance(p1, p2) < r) {
-        					energy[i] = E;
-        					direction[i] = d2;
-        					next_pushes.add(new Util.Push(asteroids[i], i, t, E));
-        				}
-        			}
-        		}
+
+                Util.Push test_push = new Util.Push(asteroids[i], i, time, E);
+
+                try {
+                    a1 = test_push.simulatedAsteroid(asteroids);
+                    for (int j = 0; j < asteroids.length; ++j) {
+                        if (i == j) {
+                            continue;
+                        }
+                        long collision_time = Util.findCollision(a1, asteroids[j], time, time + 1825);
+                        if (collision_time >= 0) {
+                            next_pushes.add(test_push);
+                        }
+                    }
+                } catch (InvalidOrbitException e) {
+                    System.out.println("Invalid Orbit: " + e.getMessage());
+                    return;
+                }
             }
 
         }
