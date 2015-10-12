@@ -382,16 +382,13 @@ public class Util {
             if (a.asteroid_idx != b.asteroid_idx || a.push_time != b.push_time || a.mass != b.mass) {
                 throw new RuntimeException("Adding incompatible pushes");
             }
-            double double_root_m_times_v_a = Math.sqrt(a.energy);
-            double double_root_m_times_v_b = Math.sqrt(b.energy);
-            double dxa = Math.cos(a.direction) * double_root_m_times_v_a;
-            double dya = Math.sin(a.direction) * double_root_m_times_v_a;
-            double dxb = Math.cos(b.direction) * double_root_m_times_v_b;
-            double dyb = Math.sin(b.direction) * double_root_m_times_v_b;
-            double dx = dxa + dxb;
-            double dy = dya + dyb;
+            double v_a_mag = Math.sqrt((2 * a.energy) / a.mass);
+            double v_b_mag = Math.sqrt((2 * b.energy) / b.mass);
 
-            double E = dx * dx + dy * dy;
+            double dx = Math.cos(a.direction) * v_a_mag + Math.cos(b.direction) * v_b_mag;
+            double dy = Math.sin(a.direction) * v_a_mag + Math.sin(b.direction) * v_b_mag;
+
+            double E = 0.5 * a.mass * (dx * dx + dy * dy);
             double direction = Math.atan2(dy, dx);
 
             return new Push(a.asteroid_idx, a.push_time, E, direction, a.mass);

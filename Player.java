@@ -86,9 +86,36 @@ public class Player implements pb.sim.Player {
 
     private Util.Push moveToRadius(long push_time, int aidx, Asteroid a, double radius) {
         double r_a = a.orbit.positionAt(push_time - a.epoch).magnitude();
-        double normalization_energy = reverseHohmannTransfer(a, r_a); // make it a circle?
+        //double normalization_energy = reverseHohmannTransfer(a, r_a); // make it a circle?
         double hohmann_energy = hohmannTransfer(a, radius); // instantaneously ellipsize it
-        return new Util.Push(a, aidx, push_time, hohmann_energy + normalization_energy);
+        Util.Push hohmann_push = new Util.Push(a, aidx, push_time, hohmann_energy);
+        return Util.Push.add(hohmann_push, circularize(push_time, aidx, a));
+    }
+
+    private Util.Push circularize(long push_time, int aidx, Asteroid a) {
+        // circularizes at current radius
+        Point p = new Point();
+        Util.positionAt(a, push_time, p);
+        double r = p.magnitude();
+        double ortho_dir = p.direction();
+
+        Util.velocityAt(a, push_time, p);
+        double tangent_dir = p.direction();
+        double current_velocity = p.magnitude();
+
+
+        double bad_vel = Math.cos(ortho_dir - tangent_dir) * current_velocity;
+        double good_vel = Math.sin(ortho_dir - tangent_dir) * current_velocity;
+
+        double energy_to_remove_tangent_vel = 0.5 * a.mass * bad_vel * bad_vel;
+        double reverse_bad_direction = ortho_dir + Math.PI;
+
+        double target_v = Math.sqrt(Orbit.GM / r);
+
+        Util.Push counteract_bad = new Util.Push(aidx, push_time, energy_to_remove_tangent_vel, reverse_bad_direction, a.mass);
+        Util.Push add_good = new Util.Push(aidx, push_time, 0.5 * a.mass * Math.pow(target_v - Math.abs(good_vel), 2), ortho_dir + Math.PI / 2, a.mass);
+
+        return Util.Push.add(counteract_bad, add_good);
     }
 
     /**
@@ -277,8 +304,8 @@ public class Player implements pb.sim.Player {
         			if (Math.abs(E) == 0) {
         				continue;
         			}
-        			if (Math.abs(r_ap - r_ph) > a.radius()) {
-        				// make it a circles!!
+                    if (Math.abs(r_ap - r_ph) > a.radius() || true) {
+                        // make it a circles!!
         				Util.Push circularize = new Util.Push(a, indexes[i], apoapsis_time, E);
         				if (next_push == null || circularize.push_time < next_push.push_time) {
         					next_push = circularize;
@@ -302,35 +329,30 @@ public class Player implements pb.sim.Player {
         		Random random = new Random();
         		Asteroid a1 = null;
         		int i = radius_indexes[radius_indexes.length - 1];
-        		Point v = asteroids[i].orbit.velocityAt(time);
-        		double v1 = Math.sqrt(v.x * v.x + v.y * v.y);
-        		double v2 = v1 * (random.nextDouble() * 0.25 + 0.05);
-        		double d1 = Math.atan2(v.y, v.x);
-        		double d2 = d1 + (random.nextDouble() - 0.5) * Math.PI * 0.25;
+                Point v = Util.velocityAt(asteroids[i], time);
+                double v1 = v.magnitude();
+                double v2 = v1 * (random.nextDouble() * 0.25 + 0.05);
+                double d1 = v.direction();
+                double d2 = d1 + (random.nextDouble() - 0.5) * Math.PI * 0.25;
         		double E = 0.5 * asteroids[i].mass * v2 * v2;
-        		try {
-        			a1 = Asteroid.push(asteroids[i], time, E, d2);
-        		} catch (InvalidOrbitException e) {
-        			System.out.println("Invalid Orbit: " + e.getMessage());
-        			return;
-        		}
-        		Point p1 = v, p2 = new Point();
-        		for (int j = 0; j < asteroids.length; j++) {
-        			if (i == j) continue;
-        			Asteroid a2 = asteroids[j];
-        			double r = a1.radius() + a2.radius();
-        			for (long ft = 0 ; ft != 1825 ; ++ft) {
-        				long t = time + ft;
-        				if (t >= time_limit) break;
-        				a1.orbit.positionAt(t - a1.epoch, p1);
-        				a2.orbit.positionAt(t - a2.epoch, p2);
-        				if (Point.distance(p1, p2) < r) {
-        					energy[i] = E;
-        					direction[i] = d2;
-        					next_pushes.add(new Util.Push(asteroids[i], i, t, E));
-        				}
-        			}
-        		}
+
+                Util.Push test_push = new Util.Push(asteroids[i], i, time, E);
+
+                try {
+                    a1 = test_push.simulatedAsteroid(asteroids);
+                    for (int j = 0; j < asteroids.length; ++j) {
+                        if (i == j) {
+                            continue;
+                        }
+                        long collision_time = Util.findCollision(a1, asteroids[j], time, time + 1825);
+                        if (collision_time >= 0) {
+                            next_pushes.add(test_push);
+                        }
+                    }
+                } catch (InvalidOrbitException e) {
+                    System.out.println("Invalid Orbit: " + e.getMessage());
+                    return;
+                }
             }
 
         }
