@@ -37,7 +37,7 @@ public class Util {
      * @param t_offset     the time from the original orbit
      * @param a            the asteroid whose period we are inspecting
      * @param current_time the minimum time
-     * @return
+     * @return next t after t_offset in a's orbit
      */
     public static long nextAfterTime(long t_offset, Asteroid a, long current_time) {
         long t = current_time % a.orbit.period() + t_offset;
@@ -381,8 +381,8 @@ public class Util {
         }
     }
 
-    public static class Push implements Comparable<Push> {
-        public int asteroid_idx;
+    public static class Push {
+        public Asteroid asteroid;
         public long push_time;
         public long expected_collision_time;
         public double energy;
@@ -390,20 +390,20 @@ public class Util {
         public double mass;
         private Asteroid _simulated;
 
-        public Push(Asteroid a, int aidx, long pt, double e) {
+        public Push(Asteroid a, long pt, double e) {
             double dir = a.orbit.velocityAt(pt - a.epoch).direction();
             if (e < 0) {
                 dir += Math.PI;
             }
-            init(aidx, pt, Math.abs(e), dir, a.mass);
+            init(a, pt, Math.abs(e), dir, a.mass);
         }
 
-        public Push(int aidx, long pt, double e, double d, double m) {
-            init(aidx, pt, e, d, m);
+        public Push(Asteroid a, long pt, double e, double d, double m) {
+            init(a, pt, e, d, m);
         }
 
         public static Push add(Push a, Push b) {
-            if (a.asteroid_idx != b.asteroid_idx || a.push_time != b.push_time || a.mass != b.mass) {
+            if (a.asteroid.id != b.asteroid.id || a.push_time != b.push_time || a.mass != b.mass) {
                 throw new RuntimeException("Adding incompatible pushes");
             }
             double v_a_mag = Math.sqrt((2 * a.energy) / a.mass);
@@ -415,11 +415,11 @@ public class Util {
             double E = 0.5 * a.mass * (dx * dx + dy * dy);
             double direction = Math.atan2(dy, dx);
 
-            return new Push(a.asteroid_idx, a.push_time, E, direction, a.mass);
+            return new Push(a.asteroid, a.push_time, E, direction, a.mass);
         }
 
-        private void init(int aidx, long pt, double e, double d, double m) {
-            asteroid_idx = aidx;
+        private void init(Asteroid a, long pt, double e, double d, double m) {
+            asteroid = a;
             push_time = pt;
             energy = e;
             direction = d;
@@ -428,21 +428,16 @@ public class Util {
             expected_collision_time = -1;
         }
 
-        public Asteroid simulatedAsteroid(Asteroid a[]) {
+        public Asteroid simulatedAsteroid() {
             if (_simulated == null) {
-                _simulated = Asteroid.push(a[asteroid_idx], push_time, energy, direction);
+                _simulated = Asteroid.push(asteroid, push_time, energy, direction);
             }
             return _simulated;
         }
 
         public String toString() {
             return String.format("Push: asteroid %d on %s with energyAtTime %6.3e in direction %.02f deg",
-                    asteroid_idx, toYearString(push_time), energy, Math.toDegrees(direction));
-        }
-
-        @Override
-        public int compareTo(Push o) {
-            return (int) (push_time - o.push_time);
+                    asteroid.id, toYearString(push_time), energy, Math.toDegrees(direction));
         }
     }
 
