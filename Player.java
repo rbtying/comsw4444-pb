@@ -172,6 +172,8 @@ public class Player implements pb.sim.Player {
 
         Point p = new Point();
 
+        long must_collide_by = max_time + (max_time - time) / 2;
+
         for (long push_time = time; push_time < max_time; ++push_time) {
             Util.positionAt(a, push_time, p);
             double local_angle = p.direction();
@@ -190,7 +192,8 @@ public class Player implements pb.sim.Player {
             if (push_target_ph.energy > 0) {
                 push_target_ph.expected_collision_time = findCollisionGivenHohmannTransfer(target, push_target_ph);
 
-                if (push_target_ph.expected_collision_time >= 0) {
+                if (push_target_ph.expected_collision_time >= 0 && push_target_ph.expected_collision_time <=
+                        must_collide_by) {
                     best_next_push_heap.add(push_target_ph);
                 }
             }
@@ -199,7 +202,7 @@ public class Player implements pb.sim.Player {
             if (push_target_ap.energy > 0) {
                 push_target_ap.expected_collision_time = findCollisionGivenHohmannTransfer(target, push_target_ap);
 
-                if (push_target_ap.expected_collision_time >= 0) {
+                if (push_target_ap.expected_collision_time >= 0 && push_target_ap.expected_collision_time <= must_collide_by) {
                     best_next_push_heap.add(push_target_ap);
                 }
             }
