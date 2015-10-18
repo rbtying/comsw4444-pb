@@ -130,16 +130,7 @@ public class Util {
      * @return value of long that maximizes f
      */
     public static long findArgMax(long start, long end, Function<Long, Double> f) {
-        long idx = start;
-        double maxval = Double.MIN_VALUE;
-        for (long l = start; l < end; ++l) {
-            double test = f.apply(l);
-            if (test > maxval) {
-                maxval = test;
-                idx = l;
-            }
-        }
-        return idx;
+        return findArgMin(start, end, (x) -> -f.apply(x));
     }
 
     /**
@@ -161,6 +152,39 @@ public class Util {
             }
         }
         return idx;
+    }
+
+    /**
+     * Computes the argmin of f from i=start to i=end
+     *
+     * @param start initial value of int
+     * @param end   one more than last value of int
+     * @param f     f: int -> double
+     * @return value of int which minimizes f
+     */
+    public static int findArgMinI(int start, int end, Function<Integer, Double> f) {
+        int idx = start;
+        double minval = Double.MAX_VALUE;
+        for (int l = start; l < end; ++l) {
+            double test = f.apply(l);
+            if (test < minval) {
+                minval = test;
+                idx = l;
+            }
+        }
+        return idx;
+    }
+
+    /**
+     * Computes the argmax of f from i=start to i=end
+     *
+     * @param start initial value of long
+     * @param end   one more than last value of long
+     * @param f     f: long -> double
+     * @return value of long that maximizes f
+     */
+    public static int findArgMaxI(int start, int end, Function<Integer, Double> f) {
+        return findArgMinI(start, end, (x) -> -f.apply(x));
     }
 
     /**

@@ -40,7 +40,7 @@ public class Player implements pb.sim.Player {
     /**
      * Computes the energyAtTime needed to transfer asteroid a from radius b
      *
-     * @param a asteroid to transfer (elliptical at tangent)
+     * @param a   asteroid to transfer (elliptical at tangent)
      * @param r_b radius to transfer it to
      * @return reverse Hohmann transfer energy
      */
@@ -68,6 +68,7 @@ public class Player implements pb.sim.Player {
 
     /**
      * Finds the apoapsis time of a
+     *
      * @param a the asteroid
      * @return the time in the period which is a's apoapsis
      */
@@ -78,6 +79,7 @@ public class Player implements pb.sim.Player {
 
     /**
      * Finds the periapsis distance of a
+     *
      * @param a an asteroid
      * @return periapsis distance
      */
@@ -87,6 +89,7 @@ public class Player implements pb.sim.Player {
 
     /**
      * Finds the apoapsis distance of a
+     *
      * @param a an asteroid
      * @return apoapsis distance
      */
@@ -158,8 +161,8 @@ public class Player implements pb.sim.Player {
     /**
      * Evaluates whether the asteroid at a_idx will collide with target. If so, it adds it to the best_next_push_heap
      *
-     * @param target target asteroid
-     * @param a asteroid to attempt to collide
+     * @param target              target asteroid
+     * @param a                   asteroid to attempt to collide
      * @param best_next_push_heap heap to keep track of the best next push
      */
     public void evaluateAsteroid(Asteroid target, Asteroid a, PriorityQueue<Util.Push>
@@ -242,16 +245,24 @@ public class Player implements pb.sim.Player {
             Arrays.sort(asteroids_by_radius, (a1, a2) -> Double.compare(findPeriapsisDistance(a2),
                     findPeriapsisDistance(a1)));
 
-            // find center of mass
-            double com = 0;
-            double total_mass = 0;
-            for (int i = 0; i < asteroids_by_radius.length; ++i) {
-                com += asteroids_by_radius[i].mass * i;
-                total_mass += asteroids_by_radius[i].mass;
-            }
-            com /= total_mass;
+            double costs[] = new double[asteroids.length];
 
-            target = asteroids_by_radius[(int) (com + 0.5)];
+            for (int i = 0; i < asteroids_by_radius.length; ++i) {
+                double r = findPeriapsisDistance(asteroids_by_radius[i]);
+                for (Asteroid a : asteroids_by_radius) {
+                    costs[i] += moveToRadius(0, a, r).energy;
+                }
+            }
+
+            target = asteroids_by_radius[Util.findArgMinI(0, costs.length, (x) -> costs[x])];
+
+            if (Math.abs(findPeriapsisDistance(asteroids_by_radius[0]) - findPeriapsisDistance
+                    (asteroids_by_radius[asteroids_by_radius.length - 1])) < asteroids_by_radius[0].radius()) {
+                System.out.println("Same-orbit detected, initiate random push");
+                next_pushes.add(moveToRadius(time, asteroids_by_radius[0], findPeriapsisDistance
+                        (asteroids_by_radius[0]) * 1.1));
+                return;
+            }
         } else {
             Asteroid asteroids_by_mass[] = new Asteroid[asteroids.length];
             System.arraycopy(asteroids, 0, asteroids_by_mass, 0, asteroids.length);
@@ -376,10 +387,10 @@ public class Player implements pb.sim.Player {
                 }
             }
         } else {
-        	// no pushes computed
-        	System.out.println("no next push, computing more");
-        	
-        	long startTime = System.nanoTime();
+            // no pushes computed
+            System.out.println("no next push, computing more");
+
+            long startTime = System.nanoTime();
 
             computePushes(asteroids, time, time + search_space);
 
