@@ -20,6 +20,10 @@ public class Player implements pb.sim.Player {
     private PriorityQueue<Util.Push> next_pushes = new PriorityQueue<>((p1, p2) -> Long.compare(p1.push_time, p2
             .push_time));
 
+    private Asteroid target;
+    private double target_mass;
+    private boolean consider_circularize = true;
+
     /**
      * Computes the energyAtTime needed to transfer asteroid a to radius b when
      * launching from its apoapsis
@@ -172,7 +176,7 @@ public class Player implements pb.sim.Player {
 
         Point p = new Point();
 
-        long must_collide_by = max_time + (max_time - time) / 2;
+        long must_collide_by = Math.min(max_time + (max_time - time) / 2, time_limit - 1);
 
         for (long push_time = time; push_time < max_time; ++push_time) {
             Util.positionAt(a, push_time, p);
@@ -240,8 +244,7 @@ public class Player implements pb.sim.Player {
         PriorityQueue<Util.Push> best_next_push_heap = new PriorityQueue<>((p1, p2) -> Double.compare(p1.energy, p2
                 .energy));
 
-        Asteroid target;
-        if (num_pushes == 0) {
+        if (target == null) {
             Asteroid asteroids_by_radius[] = new Asteroid[asteroids.length];
             System.arraycopy(asteroids, 0, asteroids_by_radius, 0, asteroids.length);
             // sorted descending
@@ -253,26 +256,23 @@ public class Player implements pb.sim.Player {
             for (int i = 0; i < asteroids_by_radius.length; ++i) {
                 double r = findPeriapsisDistance(asteroids_by_radius[i]);
                 for (Asteroid a : asteroids_by_radius) {
-                    costs[i] += moveToRadius(0, a, r).energy;
+                    costs[i] += Math.abs(moveToRadius(0, a, r).energy);
                 }
             }
 
             target = asteroids_by_radius[Util.findArgMinI(0, costs.length, (x) -> costs[x])];
+            target_mass = target.mass;
 
             if (Math.abs(findPeriapsisDistance(asteroids_by_radius[0]) - findPeriapsisDistance
                     (asteroids_by_radius[asteroids_by_radius.length - 1])) < asteroids_by_radius[0].radius()) {
                 System.out.println("Same-orbit detected, initiate random push");
-                next_pushes.add(moveToRadius(time, asteroids_by_radius[0], findPeriapsisDistance
-                        (asteroids_by_radius[0]) * 1.1));
+                consider_circularize = false;
+                for (int i = 0; i < asteroids.length; ++i) {
+                    next_pushes.add(moveToRadius(time + i, asteroids_by_radius[i], findPeriapsisDistance
+                            (asteroids_by_radius[i]) * (i * 0.5) + 1));
+                }
                 return;
             }
-        } else {
-            Asteroid asteroids_by_mass[] = new Asteroid[asteroids.length];
-            System.arraycopy(asteroids, 0, asteroids_by_mass, 0, asteroids.length);
-            // sorted descending
-            Arrays.sort(asteroids_by_mass, (a1, a2) -> Double.compare(a2.mass, a1.mass));
-
-            target = asteroids_by_mass[0];
         }
 
         for (Asteroid a : asteroids) {
@@ -289,16 +289,18 @@ public class Player implements pb.sim.Player {
                     .expected_collision_time));
         } else {
             System.err.println("Couldn't find a good move :(");
-            System.err.println("Considering circularizing orbits");
+            if (consider_circularize) {
+                System.err.println("Considering circularizing orbits");
 
-            Util.Push next_push = circularizeAsteroids(asteroids, localtime, max_time);
+                Util.Push next_push = circularizeAsteroids(asteroids, localtime + 1, max_time);
 
-            if (next_push != null) {
-                System.out.println("Adding circularization " + next_push);
-                next_pushes.add(next_push);
-            } else {
-                System.out.println("Skipping until " + Util.toYearString(max_time));
-                time_skip = max_time;
+                if (next_push != null) {
+                    System.out.println("Adding circularization " + next_push);
+                    next_pushes.add(next_push);
+                } else {
+                    System.out.println("Skipping until " + Util.toYearString(max_time));
+                    time_skip = max_time;
+                }
             }
         }
     }
@@ -343,6 +345,15 @@ public class Player implements pb.sim.Player {
             System.out.println(String.format("#asteroids changed from %d to %d, dropping queued pushes", num_asteroids,
                     asteroids.length));
             num_asteroids = asteroids.length;
+
+            // finding new target
+            if (!extant_asteroids.contains(target.id)) {
+                for (Asteroid a : asteroids) {
+                    if (a.mass == target_mass) {
+                        target = a;
+                    }
+                }
+            }
         }
 
         if (time_skip > time) {
@@ -380,6 +391,7 @@ public class Player implements pb.sim.Player {
 
                     if (time_skip < next_push.expected_collision_time) {
                         time_skip = next_push.expected_collision_time + 1;
+                        target_mass = target.mass + next_push.asteroid.mass;
                         System.out.println("Waiting until " + Util.toYearString(time_skip));
                     }
 
